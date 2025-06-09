@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  corebridge-ping:
+    build: .
+    container_name: corebridge-corebridge-ping
+    ports:
+      - "3007:3007"
+    environment:
+      - NODE_ENV=production
+      - PORT=3007
+      - CORE_API_URL=http://corebridge-core:4001
+    networks:
+      - corebridge-network
+    volumes:
+      # Optional: Mount logs directory for persistence
+      - ./logs:/usr/src/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  corebridge-network:
+    external: true
+    name: corebridge-core_app-network 
