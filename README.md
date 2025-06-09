@@ -1,368 +1,281 @@
-# Corebridge Ping Template
+# CoreBridge Ping Plugin
 
-This is a template plugin for CoreBridge that demonstrates best practices for plugin development and integration with the CoreBridge auto-discovery system.
+A network connectivity testing plugin for CoreBridge with PowerShell-based ping functionality and modern web interface.
 
-## Overview
+## 🏓 Features
 
-The Corebridge Ping demonstrates:
-- ✅ Required health check endpoints
-- ✅ Proper manifest configuration
-- ✅ Core API integration
-- ✅ Error handling and graceful shutdown
-- ✅ Request tracking and metrics
-- ✅ Docker networking considerations
+- **PowerShell Integration**: Uses PowerShell 7.4's `Test-Connection` cmdlet for reliable network testing
+- **Modern Web GUI**: Clean, responsive interface with real-time ping results
+- **Docker Containerized**: Fully containerized with multi-stage builds and security best practices
+- **CoreBridge Integration**: Seamless integration with CoreBridge plugin management
+- **Health Monitoring**: Built-in health checks and status reporting
+- **Production Ready**: Non-root user, optimized container, graceful shutdown
 
-## Quick Start
+## 🚀 Quick Start
 
-### 1. Copy Template
+### Prerequisites
 
+- Docker and Docker Compose
+- CoreBridge core system running
+- Port 3007 available
+
+### Installation
+
+1. **Clone and Build**:
 ```bash
-# Use the automated script (recommended)
-./scripts/create-plugin.sh my-new-plugin 3007
-
-# Or copy manually
-cp -r docs/plugin-template plugins/my-new-plugin
-cd plugins/my-new-plugin
+git clone https://github.com/yourusername/corebridge-plugin-ping.git
+cd corebridge-plugin-ping
+npm install
 ```
 
-### 2. Customize Plugin
+2. **Build Docker Container**:
+```bash
+npm run docker:build
+```
 
-Edit the following files:
+3. **Deploy with Docker Compose**:
+```bash
+npm run docker:compose:up
+```
 
-**plugin.json**
-```json
+4. **Enable in CoreBridge**:
+```bash
+curl -X POST http://localhost:4001/api/plugins/corebridge-ping/enable
+```
+
+## 🌐 Usage
+
+### Web Interface
+
+Access the ping interface at: `http://localhost:3007`
+
+- Enter domain name or IP address
+- Click "Ping" to test connectivity
+- View real-time results with response times
+- Clear results with "Clear Results" button
+
+### API Endpoints
+
+#### Ping a Host
+```bash
+POST http://localhost:3007/api/ping
+Content-Type: application/json
+
 {
-  "id": "my-new-plugin",
-  "name": "My New Plugin", 
-  "description": "Description of what your plugin does",
-  "port": 3007,
-  // ... other settings
+  "domain": "google.com"
 }
 ```
 
-**docker-compose.yml**
-```yaml
-services:
-  my-new-plugin:
-    build: .
-    container_name: corebridge-my-new-plugin
-    ports:
-      - "3007:3007"
-    # ... update service name and ports
+**Response**:
+```json
+{
+  "success": true,
+  "domain": "google.com",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "results": {
+    "output": "Test-Connection output...",
+    "success": true,
+    "responseTime": "15ms"
+  }
+}
 ```
 
-**src/index.js**
-```javascript
-const PLUGIN_ID = 'my-new-plugin';
-const PORT = process.env.PORT || 3007;
-// ... customize your plugin logic
+#### Health Check
+```bash
+GET http://localhost:3007/health
 ```
 
-### 3. Build and Test Container
+#### Plugin Status
+```bash
+GET http://localhost:3007/status
+```
 
+## 🐳 Docker Commands
+
+```bash
+# Build container
+npm run docker:build
+
+# Run standalone
+npm run docker:run
+
+# Deploy with compose
+npm run docker:compose:up
+
+# View logs
+npm run docker:compose:logs
+
+# Stop and remove
+npm run docker:compose:down
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+- `PORT`: Plugin port (default: 3007)
+- `CORE_API_URL`: CoreBridge core API URL
+- `NODE_ENV`: Environment (development/production)
+
+### Plugin Manifest (`plugin.json`)
+
+```json
+{
+  "id": "corebridge-ping",
+  "name": "CoreBridge Ping",
+  "description": "Network connectivity testing tool with PowerShell-based ping functionality",
+  "version": "1.0.0",
+  "port": 3007,
+  "endpoints": {
+    "health": "/health",
+    "gui": "/",
+    "ping": "/api/ping"
+  }
+}
+```
+
+## 🏗️ Architecture
+
+### Container Architecture
+- **Base Image**: Node.js 18 Alpine
+- **PowerShell**: Version 7.4 for cross-platform compatibility
+- **Multi-stage Build**: Optimized ~35MB container
+- **Security**: Non-root user, minimal attack surface
+- **Health Checks**: Built-in container health monitoring
+
+### Network Communication
+- **CoreBridge Integration**: Container-to-container via Docker network
+- **Service Discovery**: Automatic plugin detection and registration
+- **Health Monitoring**: Continuous status reporting to CoreBridge
+
+## 🔒 Security
+
+- Non-root container user (`pluginuser`)
+- Minimal container image with only required dependencies
+- Input validation for ping targets
+- Rate limiting on API endpoints
+- Secure container-to-container communication
+
+## 📊 Monitoring
+
+### Health Checks
+- Container health check every 30 seconds
+- Plugin status reporting to CoreBridge
+- Automatic restart on failure
+
+### Metrics
+- Ping success/failure rates
+- Response time statistics
+- Request counts and error tracking
+- Container resource usage
+
+## 🛠️ Development
+
+### Local Development
 ```bash
 # Install dependencies
 npm install
 
-# Build Docker image
-npm run docker:build
-
-# Test container locally
-docker run --rm -p 3007:3007 --name test-plugin corebridge-my-new-plugin
-
-# Test health endpoint
-curl http://localhost:3007/health
-```
-
-### 4. Deploy with CoreBridge
-
-```bash
-# Start plugin container with CoreBridge network
-npm run docker:compose:up
-
-# Check logs
-npm run docker:compose:logs
-
-# Verify plugin is running
-docker ps | grep my-new-plugin
-```
-
-### 5. Verify Discovery
-
-```bash
-# Check if plugin is discovered
-curl http://localhost:4001/api/plugins/discover
-
-# Enable your plugin
-curl -X POST http://localhost:4001/api/plugins/my-new-plugin/enable
-```
-
-## Plugin Structure
-
-```
-my-new-plugin/
-├── plugin.json         # Plugin manifest (required)
-├── package.json        # Node.js package config (required)
-├── README.md          # Plugin documentation
-├── src/
-│   └── index.js       # Main plugin code (required)
-└── docs/              # Additional documentation
-    └── api.md
-```
-
-## Required Endpoints
-
-Your plugin must implement these endpoints:
-
-### Health Check
-```
-GET /health
-```
-Returns plugin health status. Must return 200 for healthy, 503 for unhealthy.
-
-### Status Check
-```
-GET /status
-```
-Returns basic plugin status and uptime information.
-
-### Optional Metrics
-```
-GET /metrics
-```
-Returns detailed plugin metrics and performance data.
-
-## Plugin Manifest
-
-The `plugin.json` file is required and must include:
-
-### Required Fields
-- `id`: Unique plugin identifier
-- `name`: Human-readable plugin name
-- `description`: Brief description
-- `version`: Semantic version
-- `port`: Port number to listen on
-
-### Optional Fields
-- `category`: Plugin category for organization
-- `tags`: Array of searchable tags
-- `endpoints`: Custom endpoint paths
-- `dependencies`: Required dependencies
-- `permissions`: System permissions needed
-
-## Core API Integration
-
-Your plugin can communicate with CoreBridge core:
-
-```javascript
-const CORE_API_BASE = 'http://172.20.0.1:4001/api';
-
-// Send health updates
-await axios.post(`${CORE_API_BASE}/health/update`, {
-  pluginId: 'my-plugin',
-  status: 'healthy',
-  metrics: { ... }
-});
-
-// Register plugin (optional, auto-discovery handles this)
-await axios.post(`${CORE_API_BASE}/plugins/register`, {
-  pluginId: 'my-plugin',
-  name: 'My Plugin',
-  version: '1.0.0',
-  port: 3007
-});
-```
-
-## Development Workflow
-
-### 1. Development Mode
-
-```bash
-# Start with auto-reload
+# Run in development mode
 npm run dev
 
-# Or start normally
-npm start
+# Run tests
+npm test
+
+# Lint code
+npm run lint
 ```
 
-### 2. Testing
-
+### Building from Source
 ```bash
-# Test health endpoint
-curl http://localhost:3007/health
+# Build production container
+docker build -t corebridge-ping .
 
-# Test status endpoint
-curl http://localhost:3007/status
-
-# Test custom endpoints
-curl http://localhost:3007/api/info
-curl http://localhost:3007/api/data
-curl -X POST http://localhost:3007/api/echo -H "Content-Type: application/json" -d '{"test": "data"}'
+# Run with custom config
+docker run -p 3007:3007 -e CORE_API_URL=http://your-core:4001 corebridge-ping
 ```
 
-### 3. CoreBridge Integration
+## 📚 API Reference
 
+### POST /api/ping
+Test network connectivity to a host.
+
+**Request Body**:
+```json
+{
+  "domain": "string" // Domain name or IP address
+}
+```
+
+**Response**:
+```json
+{
+  "success": boolean,
+  "domain": "string",
+  "timestamp": "ISO 8601 string",
+  "results": {
+    "output": "string",
+    "success": boolean,
+    "responseTime": "string"
+  },
+  "error": "string" // Only present on error
+}
+```
+
+### GET /health
+Plugin health status.
+
+**Response**:
+```json
+{
+  "status": "healthy",
+  "timestamp": "ISO 8601 string",
+  "uptime": "number",
+  "version": "string"
+}
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+1. **Plugin not discovered**:
+   - Check CoreBridge core is running
+   - Verify Docker network connectivity
+   - Check plugin manifest format
+
+2. **Ping failures**:
+   - Verify PowerShell installation in container
+   - Check network connectivity from container
+   - Validate input domain/IP format
+
+3. **Container won't start**:
+   - Check port 3007 availability
+   - Verify Docker network configuration
+   - Check container logs: `docker logs corebridge-ping`
+
+### Logs
 ```bash
-# Force plugin discovery
-curl http://localhost:4001/api/plugins/discover
+# View container logs
+docker logs corebridge-ping -f
 
-# Check if plugin is found
-curl http://localhost:4001/api/plugins | jq '.data[] | select(.id=="my-new-plugin")'
-
-# Enable plugin
-curl -X POST http://localhost:4001/api/plugins/my-new-plugin/enable
-
-# Check plugin health
-curl -X POST http://localhost:4001/api/plugins/my-new-plugin/health
+# View compose logs
+docker-compose logs -f
 ```
 
-## Best Practices
+## 🤝 Contributing
 
-### 1. Error Handling
+1. Fork the repository
+2. Create a feature branch
+3. Make changes and add tests
+4. Submit a pull request
 
-```javascript
-// Use try-catch for async operations
-app.get('/api/data', async (req, res) => {
-  try {
-    const data = await fetchData();
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching data:', error);
-    res.status(500).json({ error: 'Failed to fetch data' });
-  }
-});
+## 📄 License
 
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({
-    error: 'Internal server error',
-    timestamp: new Date().toISOString()
-  });
-});
-```
+MIT License - see LICENSE file for details.
 
-### 2. Health Checks
+## 🔗 Related
 
-```javascript
-app.get('/health', (req, res) => {
-  const checks = {
-    database: checkDatabase(),
-    external_api: checkExternalAPI(),
-    memory: checkMemoryUsage()
-  };
-
-  const isHealthy = Object.values(checks).every(check => check === true);
-  const status = isHealthy ? 'healthy' : 'unhealthy';
-  const httpStatus = isHealthy ? 200 : 503;
-
-  res.status(httpStatus).json({
-    status,
-    checks,
-    timestamp: new Date().toISOString()
-  });
-});
-```
-
-### 3. Graceful Shutdown
-
-```javascript
-const gracefulShutdown = (signal) => {
-  console.log(`Received ${signal}, shutting down gracefully...`);
-  
-  server.close(() => {
-    // Clean up resources
-    console.log('Plugin stopped successfully');
-    process.exit(0);
-  });
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-```
-
-### 4. Request Validation
-
-```javascript
-const validateRequest = (req, res, next) => {
-  if (!req.body || typeof req.body !== 'object') {
-    return res.status(400).json({
-      error: 'Invalid request body',
-      timestamp: new Date().toISOString()
-    });
-  }
-  next();
-};
-
-app.post('/api/data', validateRequest, (req, res) => {
-  // Handle validated request
-});
-```
-
-## Networking Notes
-
-### Docker Gateway
-
-- CoreBridge core runs in Docker container
-- Plugins run on host system
-- Core accesses plugins via Docker gateway IP: `172.20.0.1`
-- Plugins access core via: `http://172.20.0.1:4001/api`
-
-### Port Management
-
-- Each plugin needs unique port
-- Default ports: 3002 (health-monitor), 3007+ (other plugins)
-- Listen on all interfaces: `0.0.0.0`
-
-```javascript
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Plugin started on port ${PORT}`);
-});
-```
-
-## Troubleshooting
-
-### Plugin Not Discovered
-
-1. Check `plugin.json` syntax
-2. Verify plugin is in `plugins/` directory
-3. Check CoreBridge logs: `docker logs corebridge-core`
-
-### Health Check Failing
-
-1. Verify plugin is running: `curl http://localhost:3007/health`
-2. Check network connectivity from Docker container
-3. Ensure health endpoint returns 200 status
-
-### Plugin Shows as Stopped
-
-1. Confirm plugin process is running: `ps aux | grep node`
-2. Check port conflicts: `lsof -i :3007`
-3. Verify Docker gateway access: `curl http://172.20.0.1:3007/health`
-
-## API Endpoints
-
-This template includes these endpoints:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check (required) |
-| `/status` | GET | Status information (required) |
-| `/metrics` | GET | Plugin metrics (optional) |
-| `/api/info` | GET | Plugin information |
-| `/api/data` | GET | Sample data endpoint |
-| `/api/echo` | POST | Echo request body |
-
-## Next Steps
-
-1. **Customize the template** for your specific use case
-2. **Implement your business logic** in the API endpoints
-3. **Add additional endpoints** as needed
-4. **Update documentation** to reflect your plugin's functionality
-5. **Test thoroughly** before deployment
-
-## Reference
-
-- [CoreBridge Plugin System Documentation](../plugin-system.md)
-- [Health Monitor Plugin](../../plugins/health-monitor/) - Reference implementation
-- [CoreBridge Development Guide](../development-guide.md) 
+- [CoreBridge Core](https://github.com/CoreBridgeTechnologies/coreBridge-Core)
+- [Plugin Development Guide](https://github.com/CoreBridgeTechnologies/coreBridge-Core/blob/main/docs/plugin-system.md)
+- [Docker Plugin Guide](https://github.com/CoreBridgeTechnologies/coreBridge-Core/blob/main/docs/docker-plugin-guide.md) 
