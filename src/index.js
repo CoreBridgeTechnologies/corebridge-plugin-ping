@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const { exec } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3007;
@@ -12,14 +13,148 @@ const PLUGIN_VERSION = '1.0.0';
 // Core API configuration (container to container)
 const CORE_API_BASE = process.env.CORE_API_URL || 'http://corebridge-core:4001';
 
+// License Manager configuration
+const LICENSE_MANAGER_URL = process.env.LICENSE_MANAGER_URL || 'http://corebridge-license-manager:3008';
+const CONFIG_FILE = path.join(__dirname, '../config.json');
+
 // Plugin state tracking
 const pluginState = {
   healthy: true,
   startTime: Date.now(),
   pingHistory: [],
   requestCount: 0,
-  errorCount: 0
+  errorCount: 0,
+  licenseValid: false,
+  licenseKey: null,
+  licenseStatus: 'unknown',
+  lastLicenseCheck: null
 };
+
+// Configuration management
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      return config;
+    }
+  } catch (error) {
+    console.error('Failed to load config:', error.message);
+  }
+  return {};
+}
+
+function saveConfig(config) {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Failed to save config:', error.message);
+    return false;
+  }
+}
+
+// License validation functions
+async function validateLicense(licenseKey = null) {
+  const keyToValidate = licenseKey || pluginState.licenseKey;
+  
+  if (!keyToValidate) {
+    console.log('No license key available for validation');
+    return { valid: false, message: 'No license key provided' };
+  }
+
+  try {
+    console.log(`Validating license for plugin: ${PLUGIN_ID}`);
+    
+    const response = await axios.post(`${LICENSE_MANAGER_URL}/api/licenses/validate`, {
+      licenseKey: keyToValidate,
+      pluginId: PLUGIN_ID,
+      machineId: getMachineId()
+    }, {
+      timeout: 10000
+    });
+
+    const result = response.data;
+    pluginState.lastLicenseCheck = new Date().toISOString();
+    
+    if (result.valid) {
+      pluginState.licenseValid = true;
+      pluginState.licenseKey = keyToValidate;
+      pluginState.licenseStatus = 'valid';
+      console.log('✅ License validation successful');
+      
+      // Save license key to config
+      const config = loadConfig();
+      config.licenseKey = keyToValidate;
+      saveConfig(config);
+      
+      return { valid: true, data: result };
+    } else {
+      pluginState.licenseValid = false;
+      pluginState.licenseStatus = result.message || 'invalid';
+      console.log(`❌ License validation failed: ${result.message}`);
+      return { valid: false, message: result.message };
+    }
+    
+  } catch (error) {
+    console.error('License validation error:', error.message);
+    pluginState.licenseValid = false;
+    pluginState.licenseStatus = 'validation_error';
+    pluginState.lastLicenseCheck = new Date().toISOString();
+    return { valid: false, message: 'License validation failed: ' + error.message };
+  }
+}
+
+function getMachineId() {
+  // Generate a simple machine ID based on hostname and some system info
+  const os = require('os');
+  const hostname = os.hostname();
+  const platform = os.platform();
+  return `${hostname}-${platform}`;
+}
+
+async function promptForLicense() {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔑 LICENSE REQUIRED');
+  console.log('='.repeat(60));
+  console.log(`Plugin: ${PLUGIN_ID}`);
+  console.log(`Machine ID: ${getMachineId()}`);
+  console.log('');
+  console.log('This plugin requires a valid license to operate.');
+  console.log('Please obtain a license from your CoreBridge administrator.');
+  console.log('');
+  console.log('You can also access the license manager at:');
+  console.log(`${LICENSE_MANAGER_URL.replace('corebridge-license-manager', 'localhost')}`);
+  console.log('');
+  console.log('To add a license key, use the web interface or send a POST request to:');
+  console.log(`POST http://localhost:${PORT}/api/license/configure`);
+  console.log('Body: {"licenseKey": "YOUR-LICENSE-KEY"}');
+  console.log('='.repeat(60));
+  
+  // Set plugin to unhealthy until license is provided
+  pluginState.healthy = false;
+  pluginState.licenseStatus = 'required';
+}
+
+// Initialize license on startup
+async function initializeLicense() {
+  console.log('Initializing license validation...');
+  
+  // Try to load license from config
+  const config = loadConfig();
+  if (config.licenseKey) {
+    console.log('Found license key in configuration');
+    const validation = await validateLicense(config.licenseKey);
+    if (validation.valid) {
+      console.log('✅ License loaded and validated successfully');
+      pluginState.healthy = true;
+      return true;
+    }
+  }
+  
+  // No valid license found
+  await promptForLicense();
+  return false;
+}
 
 // Middleware
 app.use(cors());
@@ -41,6 +176,83 @@ app.use((err, req, res, next) => {
     success: false, 
     error: 'Internal server error',
     message: err.message 
+  });
+});
+
+// License checking middleware for protected routes
+function requireLicense(req, res, next) {
+  // Skip license check for certain routes
+  const skipLicenseRoutes = ['/health', '/status', '/api/license/configure', '/api/license/status', '/'];
+  
+  if (skipLicenseRoutes.includes(req.path)) {
+    return next();
+  }
+
+  if (!pluginState.licenseValid) {
+    return res.status(403).json({
+      success: false,
+      error: 'License required',
+      message: 'This plugin requires a valid license to operate',
+      licenseStatus: pluginState.licenseStatus,
+      configurationEndpoint: `/api/license/configure`
+    });
+  }
+
+  next();
+}
+
+// Apply license middleware to protected routes
+app.use('/api/ping', requireLicense);
+
+// License management endpoints
+app.post('/api/license/configure', async (req, res) => {
+  try {
+    const { licenseKey } = req.body;
+    
+    if (!licenseKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'License key is required'
+      });
+    }
+
+    console.log('Configuring new license key...');
+    const validation = await validateLicense(licenseKey);
+    
+    if (validation.valid) {
+      pluginState.healthy = true;
+      res.json({
+        success: true,
+        message: 'License configured successfully',
+        licenseStatus: 'valid',
+        pluginStatus: 'healthy'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid license key',
+        message: validation.message
+      });
+    }
+    
+  } catch (error) {
+    console.error('License configuration error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to configure license',
+      message: error.message
+    });
+  }
+});
+
+app.get('/api/license/status', (req, res) => {
+  res.json({
+    licenseValid: pluginState.licenseValid,
+    licenseStatus: pluginState.licenseStatus,
+    lastCheck: pluginState.lastLicenseCheck,
+    machineId: getMachineId(),
+    pluginId: PLUGIN_ID,
+    hasLicenseKey: !!pluginState.licenseKey
   });
 });
 
@@ -264,6 +476,83 @@ app.get('/', (req, res) => {
         
         .success { color: #28a745; }
         .error { color: #dc3545; }
+        
+        /* License Section Styles */
+        .license-section {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .license-warning h3 {
+            color: #856404;
+            margin-bottom: 10px;
+        }
+        
+        .license-warning p {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+        
+        .license-form {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        
+        .license-form .form-group {
+            flex: 1;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .license-form input {
+            flex: 1;
+        }
+        
+        .license-btn {
+            background: #856404;
+            color: white;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .license-btn:hover {
+            background: #6f5404;
+        }
+        
+        .license-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        #licenseResult {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        
+        #licenseResult.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        #licenseResult.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading { color: #ffc107; }
+        .warning { color: #fd7e14; }
     </style>
 </head>
 <body>
@@ -276,7 +565,29 @@ app.get('/', (req, res) => {
         <div class="status-bar">
             Plugin Status: <span class="success">Running</span> | 
             Port: <span>3007</span> | 
-            Version: <span>1.0.0</span>
+            Version: <span>1.0.0</span> |
+            License: <span id="licenseStatus" class="loading">Checking...</span>
+        </div>
+        
+        <!-- License Configuration Section -->
+        <div id="licenseSection" class="license-section" style="display: none;">
+            <div class="license-warning">
+                <h3>🔑 License Required</h3>
+                <p>This plugin requires a valid license to operate. Please enter your license key below:</p>
+                <form id="licenseForm" class="license-form">
+                    <div class="form-group">
+                        <input 
+                            type="text" 
+                            id="licenseKey" 
+                            placeholder="Enter your license key (e.g., CB-XXXX-XXXX-XXXX-XXXX)"
+                            required
+                            autocomplete="off"
+                        >
+                        <button type="submit" class="license-btn">Configure License</button>
+                    </div>
+                </form>
+                <div id="licenseResult"></div>
+            </div>
         </div>
         
         <form class="ping-form" id="pingForm">
@@ -324,6 +635,110 @@ app.get('/', (req, res) => {
         const clearBtn = document.getElementById('clearBtn');
         const loading = document.getElementById('loading');
         const results = document.getElementById('results');
+        const licenseForm = document.getElementById('licenseForm');
+        const licenseSection = document.getElementById('licenseSection');
+        const licenseStatus = document.getElementById('licenseStatus');
+        const licenseResult = document.getElementById('licenseResult');
+
+        // Check license status on page load
+        async function checkLicenseStatus() {
+            try {
+                const response = await fetch('/api/license/status');
+                const data = await response.json();
+                
+                updateLicenseDisplay(data);
+                
+                if (!data.licenseValid) {
+                    showLicenseSection();
+                }
+                
+            } catch (error) {
+                console.error('Failed to check license status:', error);
+                licenseStatus.textContent = 'Error';
+                licenseStatus.className = 'error';
+                showLicenseSection();
+            }
+        }
+        
+        function updateLicenseDisplay(data) {
+            if (data.licenseValid) {
+                licenseStatus.textContent = 'Valid';
+                licenseStatus.className = 'success';
+                hideLicenseSection();
+            } else {
+                licenseStatus.textContent = data.licenseStatus || 'Invalid';
+                licenseStatus.className = data.licenseStatus === 'required' ? 'warning' : 'error';
+            }
+        }
+        
+        function showLicenseSection() {
+            licenseSection.style.display = 'block';
+            pingForm.style.display = 'none';
+        }
+        
+        function hideLicenseSection() {
+            licenseSection.style.display = 'none';
+            pingForm.style.display = 'block';
+        }
+        
+        // Handle license form submission
+        licenseForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const licenseKey = document.getElementById('licenseKey').value.trim();
+            if (!licenseKey) return;
+            
+            const submitBtn = licenseForm.querySelector('.license-btn');
+            const originalText = submitBtn.textContent;
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Configuring...';
+            licenseResult.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/license/configure', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ licenseKey })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    licenseResult.textContent = '✅ License configured successfully!';
+                    licenseResult.className = 'success';
+                    licenseResult.style.display = 'block';
+                    
+                    // Update license status
+                    licenseStatus.textContent = 'Valid';
+                    licenseStatus.className = 'success';
+                    
+                    // Hide license section and show ping form
+                    setTimeout(() => {
+                        hideLicenseSection();
+                    }, 2000);
+                    
+                } else {
+                    licenseResult.textContent = '❌ ' + (data.message || 'Failed to configure license');
+                    licenseResult.className = 'error';
+                    licenseResult.style.display = 'block';
+                }
+                
+            } catch (error) {
+                console.error('License configuration error:', error);
+                licenseResult.textContent = '❌ Network error: ' + error.message;
+                licenseResult.className = 'error';
+                licenseResult.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        });
+        
+        // Initialize license check
+        checkLicenseStatus();
 
         // Handle form submission
         pingForm.addEventListener('submit', async (e) => {
@@ -618,6 +1033,9 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`GUI available at: http://localhost:${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   
+  // Initialize license validation
+  await initializeLicense();
+  
   // Register with core system
   await registerWithCore();
   
@@ -627,9 +1045,19 @@ app.listen(PORT, '0.0.0.0', async () => {
       timestamp: new Date().toISOString(),
       requestCount: pluginState.requestCount,
       errorCount: pluginState.errorCount,
-      pingCount: pluginState.pingHistory.length
+      pingCount: pluginState.pingHistory.length,
+      licenseValid: pluginState.licenseValid,
+      licenseStatus: pluginState.licenseStatus
     };
     
     await notifyCore(healthData);
   }, 30000); // Every 30 seconds
+  
+  // Set up periodic license validation (every 1 hour)
+  setInterval(async () => {
+    if (pluginState.licenseKey) {
+      console.log('Performing periodic license validation...');
+      await validateLicense();
+    }
+  }, 3600000); // Every hour
 }); 
